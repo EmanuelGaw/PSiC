@@ -27,7 +27,6 @@ using namespace std;
 int main(void) {
 	int socketDescrpt, descriptor;
 
-	vector<pollfd> fds;
 	sockaddr_in address;
 	address.sin_family = AF_INET;
 	address.sin_port = htons(8080);
@@ -69,15 +68,16 @@ int main(void) {
 		return 0;
 	}
 
-	int i = 3; //Serwer przyjmie 2 polaczenia, zas przy trzecim zakonczy prace.
-	while(i) {
+	int i = 0;
+	while(1) {
 
 		int acceptDescrpt = accept(socketDescrpt, reinterpret_cast<sockaddr*>(&clientAddress), &clientSocketLen);
 		if (acceptDescrpt == -1) {
 			cout << "Problem z akceptacja: " << strerror(errno) << endl;
-		} else if(--i) {
+		} else if(i < 2) {
 
-			thread activeConnection([descriptor, acceptDescrpt, clientAddress, ctx]() mutable { 
+			thread activeConnection([&i, descriptor, acceptDescrpt, clientAddress, ctx]() mutable {
+				++i;
 				addrinfo* info;
 				const addrinfo ai = {};
 				descriptor = getaddrinfo(inet_ntoa(clientAddress.sin_addr), to_string(clientAddress.sin_port).c_str(), &ai, &info);
@@ -86,7 +86,7 @@ int main(void) {
 
 				//Timeout dla polaczen
 				struct timeval timeOut;
-				timeOut.tv_sec = 20; // 20-sekundowy timeout
+				timeOut.tv_sec = 21; // 60-sekundowy timeout
 				timeOut.tv_usec = 0;
 				setsockopt(acceptDescrpt, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeOut, sizeof timeOut);
 
@@ -107,8 +107,14 @@ int main(void) {
 				SSL_free(ssl);
 				freeaddrinfo(info);
 				descriptor = close(acceptDescrpt);
+				--i;
 			});
 			activeConnection.detach();
+
+		} else {
+			string response = "HTTP/1.1 503 SERVICE UNAVAILABLE\nContent-Type: text/plain \nContent-Length: 12\n\nUnavailable.\n\n";
+			descriptor = send(acceptDescrpt, response.c_str(), strlen(response.c_str()), 0);
+			descriptor = close(acceptDescrpt);
 		}
 	}
 
