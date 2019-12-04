@@ -10,8 +10,11 @@
 
 #include <regex>
 
+#include "stringValidate.h"
+
 using namespace std;
 
+/*
 vector<char> readFile (const char* path) {
   vector<char> result;
   
@@ -53,31 +56,130 @@ string processRequest(string request, bool conn) {
 	regex reqPattern("(.*) HTTP/1.[0-9]+");
 	smatch match;
 	conn = false;
-	if (std::regex_search(request, match, connectPattern) && match.size() > 1) {
+	if (regex_search(request, match, connectPattern) && match.size() > 1) {
 		conn = true;
 		return match.str(1);
-  	} else if (std::regex_search(request, match, reqPattern) && match.size() > 1) {
+  	} else if (regex_search(request, match, reqPattern) && match.size() > 1) {
   		return request;
   	} else {
 		return "";
   	}
 }
+*/
 
-string handleRequest(string request, bool conn) {
-	regex connectPattern("CONNECT (.*) HTTP/1.[0-9]+");
+bool getTargetAddress(string & request, string & address, int & port) {
+	regex normalReqPattern("(.*) ((https?://)?[\\-0-9A-Za-z\\.]*)/(.*) HTTP(.*)");
+	regex proxyReqPattern("CONNECT (.*):(.*) HTTP/1.[0-9]+");
+	smatch match;
+	if (regex_search(request, match, proxyReqPattern) && match.size() > 1) {
+		address = match.str(1); port = stoi(match.str(2));
+		request = "";
+		return false;
+  	} else if(regex_search(request, match, normalReqPattern) && match.size() > 1) {
+		address = match.str(2); request = regex_replace(request, normalReqPattern, "$1 /$4 HTTP$5");
+		if(match.str(3) == "https://") port = 443; else port = 80;
+		return true;
+  	} else {
+		address = ""; port = 0;
+		return false;
+	}
+}
+
+bool canHandleRequest(string request) {
 	regex reqPattern("(.*) HTTP/1.[0-9]+");
 	smatch match;
-	conn = false;
-	if (std::regex_search(request, match, connectPattern) && match.size() > 1) {
-		conn = true;
-		return match.str(1);
-  	} else if (std::regex_search(request, match, reqPattern) && match.size() > 1) {
-  		return request;
-  	} else {
-		return "";
-  	}
+	if (regex_search(request, match, reqPattern) && match.size() > 1) return true;
+	return false;
 }
 
+void initialExchange(int clientSt, int targetSt, string initRequest) {
+	char recvData[8000] = "";
+
+	int desc = send(targetSt, initRequest.c_str(), strlen(initRequest.c_str()), 0);
+	if (desc < 0) return;
+
+	//while oraz vector aby przechowywac string z requestem podzielonym na czesci
+	desc = recv(targetSt, &recvData, sizeof(recvData), 0);
+
+	desc = send(clientSt, recvData, strlen(recvData), 0);
+}
+
+void handleHttpConnection(int & clientSt, string initRequest) {
+	int sendDesc = 0;
+	char * answer = "";
+	if (strlen(initRequest.c_str()) > 8000) {
+		answer = "HTTP/1.1 413 PAYLOAD TOO LARGE\nContent-Type: text/plain\nContent-Length: 18\n\nPayload too large!\n\n";
+		sendDesc = send(clientSt, answer, strlen(answer), 0);
+		return;
+	}
+
+	string address;
+	int port;
+	bool init = getTargetAddress(initRequest, address, port);
+	
+	sockaddr_in targetAddress;
+	targetAddress.sin_family = AF_INET;
+	targetAddress.sin_port = htons(port);
+	inet_aton(address.c_str() , reinterpret_cast<in_addr*>(&(targetAddress.sin_addr)));
+	unsigned targetSocketLen = 24;
+
+	int targetSt = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (targetSt == -1) {
+		answer = "HTTP/1.1 500 INTERNAL SERVER ERROR\nContent-Type: text/plain\nContent-Length: 25\n\nCouldn't create a socket!\n\n";
+		sendDesc = send(clientSt, answer, strlen(answer), 0);
+		return;
+	}
+
+	//Timeout dla polaczen
+	struct timeval timeOut;
+	timeOut.tv_sec = 21; // 60-sekundowy timeout
+	timeOut.tv_usec = 0;
+	setsockopt(targetSt, SOL_SOCKET, SO_RCVTIMEO | SO_REUSEADDR, &timeOut, sizeof timeOut);
+
+	int connectDesc = connect(targetSt, reinterpret_cast<sockaddr*>(&targetAddress), targetSocketLen);
+	if (connectDesc == -1) {
+		answer = "HTTP/1.1 502 BAD GATEWAY\nContent-Type: text/plain\nContent-Length: 12\n\nBad gateway!\n\n";
+		sendDesc = send(clientSt, answer, strlen(answer), 0);
+		return;
+	} else {
+		cout << "CONNECTED TO: " << address << " :: " << port << endl;
+		if(init) initialExchange(clientSt, targetSt, initRequest);
+		else {
+			answer = "HTTP/1.1 200 OK\nContent-Type: text/plain\nContent-Length: 10\n\nConnected!\n\n";
+			sendDesc = send(clientSt, answer, strlen(answer), 0);
+		}
+		int descriptor = 0;
+		//Nasz nowy numer
+		char newNumber[28] = "22222222222222222222222200";
+
+		while(1) {
+			char recvData[8000] = "";
+
+			descriptor = recv(clientSt, &recvData, sizeof(recvData), 0);
+			if (sizeof(recvData) > 8000) {
+				string response = "HTTP/1.1 413 PAYLOAD TOO LARGE\nContent-Type: text/plain\nContent-Length: 18\n\nPayload too large!\n\n";
+				sendDesc = send(clientSt, response.c_str(), strlen(response.c_str()), 0);
+				return;
+			} else if (strlen(recvData) > 0){
+				cout << " Received data from client: " << recvData << endl;
+				descriptor = send(targetSt, recvData, strlen(recvData), 0);
+				if (descriptor < 0) return;
+				
+				descriptor = recv(targetSt, &recvData, sizeof(recvData), 0);
+				cout << " Received data from target: " << recvData << endl;
+				
+				changeNumberInString(recvData, newNumber);
+
+				descriptor = send(clientSt, recvData, strlen(recvData), 0);
+				if (descriptor < 0) return;
+			} else break;
+			
+		}
+	}
+}
+
+/////////////////////////////////////////////////////////////
+/*
 void handleNormalConnection(int & acceptDescrpt) {
 	bool connReq = false;
 	int descriptor = 0;
@@ -108,68 +210,6 @@ void handleNormalConnection(int & acceptDescrpt) {
 		} else break;
 	}
 }
-
-void handleTlsConnection(SSL * ssl) {
-	bool connReq = false;
-	int descriptor = 0;
-	string response;
-	while(1) {
-		char recvData[1024] = "";
-
-		do {
-			descriptor = SSL_read(ssl, &recvData, sizeof(recvData));
-		} while(SSL_pending(ssl) && descriptor != -1);
-		
-		if(descriptor > 0) {
-
-			try {
-				string filePath = processRequest(recvData, connReq);
-				response = filePath != "" ? 
-					getResponse(getFileExtension(filePath), readFile(filePath.c_str())) : 
-					"HTTP/1.1 502 NOT IMPLEMENTED\nContent-Type: text/plain\nContent-Length: 23\n\nRequest type handler not implemented.\n\n";
-			} catch(exception e) {
-				response = "HTTP/1.1 404 NOT FOUND\nContent-Type: text/plain\nContent-Length: 15\n\nFile not found!\n\n";
-			}
-			
-			cout << recvData << endl;
-			descriptor = SSL_write(ssl, response.c_str(), strlen(response.c_str()));
-			if (descriptor < 0) break;
-		} else break;
-	}
-}
-
-/////////////////////////////////////////////////////////////
-
-void createConnection(string address, int port) {
-	
-}
-
-/////////////////////////////////////////////////////////////
-
-string getTime(const char* format) {
-  time_t rawtime;
-  struct tm* timeinfo;
-  char output[40];
-
-  time (&rawtime);
-  timeinfo = localtime (&rawtime);
-
-  stringstream formatString;
-  formatString << "Server time: "<< format;
-  strftime (output, sizeof(output), formatString.str().data(), timeinfo);
-
-  return output;
-}
-
-pollfd preparePollfd(int fd, short events, short revents = 0) {
-	pollfd pfd = {};
-	pfd.fd = fd;
-	pfd.events = events;
-	pfd.revents = revents;
-	return pfd;
-}
-
-////////////////////////////////////////////////////////////////
 
 void initOpenssl()
 { 
@@ -203,7 +243,7 @@ void configureContext(SSL_CTX *ctx)
 {
     SSL_CTX_set_ecdh_auto(ctx, 1);
 
-    /* Set the key and cert */
+    // Set the key and cert
     if (SSL_CTX_use_certificate_file(ctx, "server.crt", SSL_FILETYPE_PEM) <= 0) {
         ERR_print_errors_fp(stderr);
 		exit(EXIT_FAILURE);
@@ -213,27 +253,6 @@ void configureContext(SSL_CTX *ctx)
         ERR_print_errors_fp(stderr);
 		exit(EXIT_FAILURE);
     }
-}
+}*/
 
 #endif
-
-/*
-descriptor = poll(fds.data(), fds.size(), -1); //&fds[0]
-		if (descriptor == -1) {
-			cout << "Problem z pollem: " << strerror(errno) << endl; 
-			return 0;
-		} else if (fds[0].revents & POLLIN) {
-fds.push_back(preparePollfd(acceptDescrpt, POLLIN));
-*/
-//fds.push_back(preparePollfd(socketDescrpt, POLLIN));
-
-	/*descriptor = fcntl(socketDescrpt, F_GETFL);
-	descriptor = fcntl(socketDescrpt, F_SETFL, descriptor); //& O_NONBLOCK
-	if (descriptor == -1) {
-		cout << "Problem z wykonaniem zadanej funkcji na gniezdzie: " << strerror(errno) << endl;
-		descriptor = close(socketDescrpt);
-		return 0;
-	}*/
-
-//else if (!(strncmp("GET", header, 3) && strncmp("POST", header, 4))) handleNormalConnection(acceptDescrpt);
-//else cout << "HTTP/1.1 400 BAD REQUEST\nContent-Type: text/plain\nContent-Length: 23\n\nBad or unknown request.\n\n";

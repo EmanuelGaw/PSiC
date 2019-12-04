@@ -35,11 +35,6 @@ int main(void) {
 	sockaddr_in clientAddress;
 	unsigned clientSocketLen = sizeof(clientAddress);
 
-	SSL_CTX *ctx;
-    initOpenssl();
-    ctx = createContext();
-    configureContext(ctx);
-
 	socketDescrpt = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (socketDescrpt == -1) {
 		cout << "Problem z gniazdem: " << strerror(errno) << endl;
@@ -70,13 +65,13 @@ int main(void) {
 
 	int i = 0;
 	while(1) {
-
+	
 		int acceptDescrpt = accept(socketDescrpt, reinterpret_cast<sockaddr*>(&clientAddress), &clientSocketLen);
 		if (acceptDescrpt == -1) {
 			cout << "Problem z akceptacja: " << strerror(errno) << endl;
 		} else if(i < 2) {
 
-			thread activeConnection([&i, descriptor, acceptDescrpt, clientAddress, ctx]() mutable {
+			thread activeConnection([&i, descriptor, acceptDescrpt, clientAddress]() mutable {
 				++i;
 				addrinfo* info;
 				const addrinfo ai = {};
@@ -93,18 +88,20 @@ int main(void) {
 				cout << "NEW CONNECTION: Address = " << inet_ntoa(clientAddress.sin_addr) << ":" << ntohs(clientAddress.sin_port)
 					 << " (" << host << "), protocol = " << (info)->ai_protocol << " ESTABLISHED.\n\n";
 
-				SSL *ssl = SSL_new(ctx);
-    			SSL_set_fd(ssl, acceptDescrpt);
-				int handshakeResult = 0;
-				char header[128]="";
-
 				//Mozemy wpisac w konsoli klienta np.: "GET /Strona/index.html HTTP/1.1".
-				handshakeResult = recv(acceptDescrpt, &header, sizeof(header), MSG_PEEK);
-				if(!memcmp("", header, 6)) { SSL_set_accept_state(ssl); handleTlsConnection(ssl); }
-				else handleNormalConnection(acceptDescrpt);
+				char header[64]="";
+				char message[8000] = "";
+				char address[100] = "";
+				char port[5] = "";
+				int received = recv(acceptDescrpt, &header, sizeof(header), MSG_PEEK);
+				if (canHandleRequest(header)) {
+					handleHttpConnection(acceptDescrpt, header);
+				} else {
+					string response = "HTTP/1.1 502 NOT IMPLEMENTED\nContent-Type: text/plain\nContent-Length: 23\n\nRequest type handler not implemented.\n\n";
+					descriptor = send(acceptDescrpt, response.c_str(), strlen(response.c_str()), 0);
+				}
 
 				cout << "CONNECTION TO: " << inet_ntoa(clientAddress.sin_addr) << ":" << ntohs(clientAddress.sin_port) << " CLOSED.\n\n";
-				SSL_free(ssl);
 				freeaddrinfo(info);
 				descriptor = close(acceptDescrpt);
 				--i;
@@ -119,8 +116,6 @@ int main(void) {
 	}
 
 	descriptor = close(socketDescrpt);
-	SSL_CTX_free(ctx);
-    cleanupOpenssl();
 	cout << "Server closed.\n";
 	return 0;
 }
