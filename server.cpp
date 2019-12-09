@@ -81,7 +81,7 @@ int main(void) {
 
 				//Timeout dla polaczen
 				struct timeval timeOut;
-				timeOut.tv_sec = 21; // 60-sekundowy timeout
+				timeOut.tv_sec = 60; // 60-sekundowy timeout
 				timeOut.tv_usec = 0;
 				setsockopt(acceptDescrpt, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeOut, sizeof timeOut);
 
