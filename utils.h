@@ -68,10 +68,11 @@ void handleHttpConnection(int & clientSt, string initRequest) {
 	targetAddress.sin_family = AF_INET;
 	targetAddress.sin_port = htons(port);
 	inet_aton(address.c_str() , reinterpret_cast<in_addr*>(&(targetAddress.sin_addr)));
-	unsigned targetSocketLen = 24;
+	unsigned targetSocketLen = sizeof(targetAddress);
 
 	int targetSt = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (targetSt == -1) {
+		cout << "DEBUG SOCKET " << strerror(errno) << endl;
 		answer = "HTTP/1.1 500 INTERNAL SERVER ERROR\nContent-Type: text/plain\nContent-Length: 25\n\nCouldn't create a socket!\n\n";
 		sendDesc = send(clientSt, answer, strlen(answer), 0);
 		return;
@@ -83,11 +84,19 @@ void handleHttpConnection(int & clientSt, string initRequest) {
 	timeOut.tv_usec = 0;
 	setsockopt(targetSt, SOL_SOCKET, SO_RCVTIMEO | SO_REUSEADDR, &timeOut, sizeof timeOut);
 
+	/*sendDesc = bind(targetSt, reinterpret_cast<sockaddr*>(&targetAddress), sizeof(targetAddress));
+	if (sendDesc == -1) {
+		cout << strerror(errno) << endl;
+		answer = "HTTP/1.1 500 INTERNAL SERVER ERROR\nContent-Type: text/plain\nContent-Length: 25\n\nCouldn't create a socket!\n\n";
+		sendDesc = send(clientSt, answer, strlen(answer), 0);
+		return;
+	}*/
+
 	int connectDesc = connect(targetSt, reinterpret_cast<sockaddr*>(&targetAddress), targetSocketLen);
 	if (connectDesc == -1) {
+		cout << "DEBUG CONNECT " << strerror(errno) << endl;
 		answer = "HTTP/1.1 502 BAD GATEWAY\nContent-Type: text/plain\nContent-Length: 12\n\nBad gateway!\n\n";
 		sendDesc = send(clientSt, answer, strlen(answer), 0);
-		cout << strerror(errno) << endl;
 		return;
 	} else {
 		cout << "CONNECTED TO: " << address << " :: " << port << endl;
