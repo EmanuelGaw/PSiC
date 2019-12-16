@@ -90,7 +90,7 @@ int main(void) {
 
 				//Mozemy wpisac w konsoli klienta np.: "GET /Strona/index.html HTTP/1.1".
 				char header[64]="";
-				char message[8000] = "";
+				char message[8192] = "";
 				char address[100] = "";
 				char port[5] = "";
 				int received = recv(acceptDescrpt, &header, sizeof(header), MSG_PEEK);
